@@ -40,34 +40,34 @@ func RegistryLogin(registry, username, password string) error {
 	return nil
 }
 
-func ImageBackup(registry, repository, src string) error {
+func ImageBackup(registry, repository, src string) (string, error) {
 	ref, err := name.ParseReference(src)
 	if err != nil {
-		return fmt.Errorf("unable to parse source ref: %s", err)
+		return "", fmt.Errorf("unable to parse source ref: %s", err)
 	}
 
 	tag, err := name.NewTag(src)
 	if err != nil {
-		return fmt.Errorf("unable to parse tag: %s", err)
+		return "", fmt.Errorf("unable to parse tag: %s", err)
 	}
 
 	desc, err := remote.Get(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	if err != nil {
-		return fmt.Errorf("unable to access remote image: %s", err)
+		return "", fmt.Errorf("unable to access remote image: %s", err)
 	}
+
 	img, err := desc.Image()
 	if err != nil {
-		return fmt.Errorf("failed to get image: %s", err)
+		return "", fmt.Errorf("failed to get image: %s", err)
 	}
 
 	newName := rename(ref, tag, registry, repository)
-
 	newRef, err := name.ParseReference(newName)
 	if err != nil {
-		return fmt.Errorf("unable to parse new ref: %s", err)
+		return "", fmt.Errorf("unable to parse new ref: %s", err)
 	}
 
-	return remote.Write(newRef, img, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	return newRef.Name(), remote.Write(newRef, img, remote.WithAuthFromKeychain(authn.DefaultKeychain))
 }
 
 func rename(source name.Reference, tag name.Tag, registry, repository string) string {
