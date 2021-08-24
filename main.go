@@ -9,32 +9,39 @@ import (
 
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
 func main() {
 	kubeconfig := flag.String("kubeconfig", filepath.Join(os.Getenv("HOME"), ".kube", "config"), "absolute path to the kubeconfig file")
-	namespace := flag.String("exclude-namespace", "kube-system", "skip watching resources in this namespace")
-	flag.Parse()
-	stopCh := make(chan struct{})
+	namespace := flag.String("exclude-namespace", "kube-system", "skip watching resources in the list of comma separated namespaces")
+	repository := flag.String("repository", "mbtamuli", "Repository to use. For example, will default to 'mbtamuli', so the image will be pushed to REGISTRY/mbtamuli/IMAGE:TAG")
+	registry := flag.String("registry", "", "Registry to use (defaults to DockerHub)")
+	registryUsername := flag.String("registry-username", "", "Username for registry login")
+	registryPassword := flag.String("registry-password", "", "Password for registry login")
 
-	// use the current context in kubeconfig
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
-	if err != nil {
-		panic(err.Error())
+	flag.Parse()
+
+	if err := RegistryLogin(*registry, *registryUsername, *registryPassword); err != nil {
+		fmt.Printf("unable to log in to registry: %s\n", err)
 	}
 
-	// create the clientset
-	clientset, err := kubernetes.NewForConfig(config)
+	stopCh := make(chan struct{})
+
+	clientset, err := getClient(*kubeconfig)
 	if err != nil {
-		panic(err.Error())
+		fmt.Println(err)
+		os.Exit(1)
 	}
 
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(clientset, time.Second*30)
 
 	controller := NewController(clientset,
 		kubeInformerFactory.Apps().V1().Deployments(),
-		*namespace)
+		*namespace,
+		*registry,
+		*repository)
 
 	kubeInformerFactory.Start(stopCh)
 
@@ -42,4 +49,25 @@ func main() {
 		fmt.Printf("Error running controller: %s", err.Error())
 	}
 
+}
+
+func getClient(kubeconfig string) (*kubernetes.Clientset, error) {
+	var kubeClient *kubernetes.Clientset
+	if inClusterConfig, err := rest.InClusterConfig(); err != nil {
+		config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("unable to build config from kubeconfig file: %s", err)
+		}
+		kubeClient, err = kubernetes.NewForConfig(config)
+		if err != nil {
+			return nil, fmt.Errorf("unable to build clientset from config: %s", err)
+		}
+	} else {
+		kubeClient, err = kubernetes.NewForConfig(inClusterConfig)
+		if err != nil {
+			return nil, fmt.Errorf("unable to build clientset from in cluster config: %s", err)
+		}
+	}
+
+	return kubeClient, nil
 }

@@ -1,13 +1,11 @@
 package main
 
 import (
-	"context"
 	"fmt"
+	"strings"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	appsinformers "k8s.io/client-go/informers/apps/v1"
 	"k8s.io/client-go/kubernetes"
@@ -22,12 +20,16 @@ type Controller struct {
 	deploymentsSynced cache.InformerSynced
 	workqueue         workqueue.RateLimitingInterface
 	namespace         string
+	registry          string
+	repository        string
 }
 
 func NewController(
 	clientset kubernetes.Interface,
 	deploymentInformer appsinformers.DeploymentInformer,
-	namespace string) *Controller {
+	namespace,
+	registry,
+	repository string) *Controller {
 
 	controller := &Controller{
 		kubeclientset:     clientset,
@@ -35,6 +37,8 @@ func NewController(
 		deploymentsSynced: deploymentInformer.Informer().HasSynced,
 		workqueue:         workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "image-clone-controller"),
 		namespace:         namespace,
+		registry:          registry,
+		repository:        repository,
 	}
 
 	deploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -50,7 +54,7 @@ func NewController(
 func (c *Controller) Run(stopCh <-chan struct{}) error {
 	defer c.workqueue.ShutDown()
 
-	fmt.Println("Starting Foo controller")
+	fmt.Println("Starting image-clone-controller")
 
 	fmt.Println("Waiting for informer caches to sync")
 	if ok := cache.WaitForCacheSync(stopCh, c.deploymentsSynced); !ok {
@@ -113,6 +117,7 @@ func (c *Controller) processNextWorkItem() bool {
 // syncHandler compares the actual state with the desired, and attempts to
 // converge the two.
 func (c *Controller) syncHandler(key string) error {
+	fmt.Printf("Starting handler for %s\n", key)
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		fmt.Println(fmt.Errorf("invalid resource key: %s", key))
@@ -130,19 +135,9 @@ func (c *Controller) syncHandler(key string) error {
 
 	deploymentImage := deployment.Spec.Template.Spec.Containers[0].Image
 
-	cfgMap := corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: namespace,
-			Name:      name,
-		},
-		Data: map[string]string{
-			"Image": deploymentImage,
-		},
-	}
-
-	_, err = c.kubeclientset.CoreV1().ConfigMaps(namespace).Create(context.TODO(), &cfgMap, metav1.CreateOptions{})
+	_, err = ImageBackup(c.registry, c.repository, deploymentImage)
 	if err != nil {
-		fmt.Printf("unable to create configmap %s\n", err)
+		return fmt.Errorf("unable to backup image: %s", err)
 	}
 
 	return nil
@@ -160,8 +155,7 @@ func (c *Controller) enqueDeployment(obj interface{}) {
 	if err != nil {
 		fmt.Println(fmt.Errorf("invalid resource key: %s", key))
 	}
-	if namespace != c.namespace {
+	if !strings.Contains(c.namespace, namespace) {
 		c.workqueue.Add(key)
 	}
-
 }
