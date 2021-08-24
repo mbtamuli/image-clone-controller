@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
@@ -13,15 +12,13 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
-var repository string = "quay.io/mbtamuli"
-
 func RegistryLogin(registry, username, password string) error {
 	if username == "" && password == "" {
 		return fmt.Errorf("username and password required")
 	}
 	cf, err := config.Load(os.Getenv("DOCKER_CONFIG"))
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to load config: %s", err)
 	}
 	creds := cf.GetCredentialsStore(registry)
 	if registry == name.DefaultRegistry {
@@ -33,47 +30,53 @@ func RegistryLogin(registry, username, password string) error {
 		Username:      username,
 		Password:      password,
 	}); err != nil {
-		return err
+		return fmt.Errorf("unable to store credentials: %s", err)
 	}
 
 	if err := cf.Save(); err != nil {
-		return err
+		return fmt.Errorf("unable to save config: %s", err)
 	}
-	log.Printf("logged in via %s", cf.Filename)
 
 	return nil
 }
 
-func ImageBackup(src string) error {
-	if err := imageTag(src); err != nil {
-		return err
-	}
-	return nil
-}
-
-func imageTag(src string) error {
+func ImageBackup(registry, repository, src string) error {
 	ref, err := name.ParseReference(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to parse source ref: %s", err)
 	}
 
 	tag, err := name.NewTag(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to parse tag: %s", err)
 	}
 
-	img, err := remote.Image(ref)
+	desc, err := remote.Get(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to access remote image: %s", err)
 	}
-
-	nameWithoutRegistry := strings.ReplaceAll(ref.Context().Name(), ref.Context().RegistryStr(), "")
-	nameWithoutNestedRepository := strings.ReplaceAll(nameWithoutRegistry, "/", "-")
-	nameWithBackupRegistry := repository + "/" + nameWithoutNestedRepository[1:] + ":" + tag.TagStr()
-
-	newRef, err := name.ParseReference(nameWithBackupRegistry)
+	img, err := desc.Image()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get image: %s", err)
 	}
+
+	newName := rename(ref, tag, registry, repository)
+
+	newRef, err := name.ParseReference(newName)
+	if err != nil {
+		return fmt.Errorf("unable to parse new ref: %s", err)
+	}
+
 	return remote.Write(newRef, img, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+}
+
+func rename(source name.Reference, tag name.Tag, registry, repository string) string {
+	var destination string
+	nameWithoutRegistry := strings.ReplaceAll(source.Context().Name(), source.Context().RegistryStr(), "")
+	nameWithoutNestedRepository := strings.ReplaceAll(nameWithoutRegistry, "/", "-")
+	destination = registry + "/" + repository + "/" + nameWithoutNestedRepository[1:] + ":" + tag.TagStr()
+	if strings.Contains(registry, "index.docker.io/v1") || registry == "" {
+		destination = repository + "/" + nameWithoutNestedRepository[1:] + ":" + tag.TagStr()
+	}
+	return destination
 }

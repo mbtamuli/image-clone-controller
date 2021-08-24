@@ -11,6 +11,8 @@ import (
 func main() {
 	// kubeconfig := flag.String("kubeconfig", filepath.Join(os.Getenv("HOME"), ".kube", "config"), "absolute path to the kubeconfig file")
 	// namespace := flag.String("exclude-namespace", "kube-system", "skip watching resources in this namespace")
+	image := flag.String("image", "nginx:1.19", "Image to clone")
+	repository := flag.String("repository", "mbtamuli", "Repository to use. For example, will default to 'mbtamuli', so the image will be pushed to REGISTRY/mbtamuli/IMAGE:TAG")
 	registry := flag.String("registry", "", "Registry to use (defaults to DockerHub)")
 	registryUsername := flag.String("registry-username", "", "Username for registry login")
 	registryPassword := flag.String("registry-password", "", "Password for registry login")
@@ -21,7 +23,7 @@ func main() {
 		fmt.Printf("unable to log in: %s\n", err)
 	}
 
-	if err := ImageBackup("nginx:1.19"); err != nil {
+	if err := ImageBackup(*registry, *repository, *image); err != nil {
 		fmt.Printf("unable to backup image: %s\n", err)
 	}
 	// stopCh := make(chan struct{})
