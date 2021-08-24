@@ -74,7 +74,7 @@ func rename(source name.Reference, tag name.Tag, registry, repository string) st
 	var destination string
 	nameWithoutRegistry := strings.ReplaceAll(source.Context().Name(), source.Context().RegistryStr(), "")
 	nameWithoutNestedRepository := strings.ReplaceAll(nameWithoutRegistry, "/", "-")
-	destination = registry + "/" + repository + "/" + nameWithoutNestedRepository[1:] + ":" + tag.TagStr()
+	destination = fmt.Sprintf("%s/%s/%s:%s", registry, repository, nameWithoutNestedRepository[1:], tag.TagStr())
 	if strings.Contains(registry, "index.docker.io/v1") || registry == "" {
 		destination = repository + "/" + nameWithoutNestedRepository[1:] + ":" + tag.TagStr()
 	}
