@@ -53,7 +53,6 @@ For development, **kind** cluster was used, and the local-deploy target works fo
 ```
   start-local-cluster        Start kind cluster.
   stop-local-cluster         Stop kind cluster.
-  local-deploy               Deploy to cluster for development, mounting the current directory inside the cluster.
   kind-load-docker           Load docker-image in kind cluster.
 ```
 

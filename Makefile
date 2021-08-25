@@ -14,21 +14,11 @@ help: ## Show this help screen.
 
 .PHONY: start-local-cluster
 start-local-cluster: ## Start kind cluster.
-	sed "s#CURRENT_DIR#$(PWD)#" kind-config.yaml | kind create cluster --name image-clone-controller --config -
+	kind create cluster --name image-clone-controller
 
 .PHONY: stop-local-cluster
 stop-local-cluster: ## Stop kind cluster.
 	kind delete cluster --name image-clone-controller
-
-.PHONY: local-deploy
-local-deploy: ## Deploy to cluster for development, mounting the current directory inside the cluster.
-	@kubectl create namespace image-clone-controller; \
-	kubectl create secret --namespace image-clone-controller generic registry-cred \
-		--from-literal=registry="$(REGISTRY)" \
-		--from-literal=registry-username="$(REGISTRY_USERNAME)" \
-		--from-literal=registry-password="$(REGISTRY_PASSWORD)"; \
-	kubectl apply --filename rbac.yaml; \
-	kubectl apply --filename deployment-kind.yaml;
 
 .PHONY: kind-load-docker
 kind-load-docker: ## Load docker-image in kind cluster.
