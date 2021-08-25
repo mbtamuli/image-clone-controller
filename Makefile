@@ -54,7 +54,8 @@ docker-push: ## Push controller docker image.
 
 .PHONY: deploy
 deploy: ## Deploy the controller and related resources to the cluster.
-	@kubectl create namespace image-clone-controller; \
+	cd manifests; \
+	kubectl create namespace image-clone-controller; \
 	kubectl create secret --namespace image-clone-controller generic registry-cred \
 		--from-literal=registry="$(REGISTRY)" \
 		--from-literal=registry-username="$(REGISTRY_USERNAME)" \
@@ -64,6 +65,7 @@ deploy: ## Deploy the controller and related resources to the cluster.
 
 .PHONY: undeploy
 undeploy: ## Remove controller and related resources from the cluster.
+	cd manifests; \
 	kubectl delete secret --namespace image-clone-controller registry-cred; \
 	kubectl delete --filename rbac.yaml; \
 	kubectl delete --filename deployment.yaml; \
