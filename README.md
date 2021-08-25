@@ -16,10 +16,13 @@ The project has make targets to deploy to the kubernets cluster. You will need t
 For deploying, you will need to set a few environment variables. The variables will be used while creating a Secret, which will be used for authenticating to the remote repository. The controller can be set to not modify any objects in specified namespaces. The default excluded namespaces are - `"kube-system,local-path-storage,image-clone-controller"`.
 
 ```sh
-export REGISTRY="CHANGE_ME"                                     //Check the table below for the exact value
+//Check the table below for the exact value for REGISTRY
+export REGISTRY="CHANGE_ME"
 export REGISTRY_USERNAME="CHANGE_ME"
 export REGISTRY_PASSWORD="CHANGE_ME"
-export EXCLUDE_NAMESPACES="list,of,comma,separated,namespaces"  // OPTIONAL
+
+// OPTIONAL
+export EXCLUDE_NAMESPACES="list,of,comma,separated,namespaces"
 make deploy
 ```
 
