@@ -21,6 +21,8 @@ type Controller struct {
 	workqueue         workqueue.RateLimitingInterface
 	namespace         string
 	registry          string
+	registryUsername  string
+	registryPassword  string
 	repository        string
 }
 
@@ -29,6 +31,8 @@ func NewController(
 	deploymentInformer appsinformers.DeploymentInformer,
 	namespace,
 	registry,
+	registryUsername,
+	registryPassword,
 	repository string) *Controller {
 
 	controller := &Controller{
@@ -38,6 +42,8 @@ func NewController(
 		workqueue:         workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "image-clone-controller"),
 		namespace:         namespace,
 		registry:          registry,
+		registryUsername:  registryUsername,
+		registryPassword:  registryPassword,
 		repository:        repository,
 	}
 
@@ -134,6 +140,11 @@ func (c *Controller) syncHandler(key string) error {
 	}
 
 	deploymentImage := deployment.Spec.Template.Spec.Containers[0].Image
+
+	err = RegistryLogin(c.registry, c.registryUsername, c.registryPassword)
+	if err != nil {
+		return fmt.Errorf("unable to login to registry: %s", err)
+	}
 
 	_, err = ImageBackup(c.registry, c.repository, deploymentImage)
 	if err != nil {

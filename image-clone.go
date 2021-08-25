@@ -13,6 +13,11 @@ import (
 )
 
 func RegistryLogin(registry, username, password string) error {
+	reg, err := name.NewRegistry(registry)
+	if err != nil {
+		return err
+	}
+	serverAddress := reg.Name()
 	if username == "" && password == "" {
 		return fmt.Errorf("username and password required")
 	}
@@ -20,13 +25,13 @@ func RegistryLogin(registry, username, password string) error {
 	if err != nil {
 		return fmt.Errorf("unable to load config: %s", err)
 	}
-	creds := cf.GetCredentialsStore(registry)
-	if registry == name.DefaultRegistry {
-		registry = authn.DefaultAuthKey
+	creds := cf.GetCredentialsStore(serverAddress)
+	if serverAddress == name.DefaultRegistry {
+		serverAddress = authn.DefaultAuthKey
 	}
 
 	if err := creds.Store(types.AuthConfig{
-		ServerAddress: registry,
+		ServerAddress: serverAddress,
 		Username:      username,
 		Password:      password,
 	}); err != nil {
@@ -37,6 +42,7 @@ func RegistryLogin(registry, username, password string) error {
 		return fmt.Errorf("unable to save config: %s", err)
 	}
 
+	fmt.Printf("logged in via %s\n", cf.Filename)
 	return nil
 }
 
