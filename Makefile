@@ -12,6 +12,30 @@ help: ## Show this help screen.
 
 ##@ Development
 
+.PHONY: start-local-cluster
+start-local-cluster: ## Start kind cluster.
+	sed "s#CURRENT_DIR#$(PWD)#" kind-config.yaml | kind create cluster --name image-clone-controller --config -
+
+.PHONY: stop-local-cluster
+stop-local-cluster: ## Stop kind cluster.
+	kind delete cluster --name image-clone-controller
+
+.PHONY: local-deploy
+local-deploy: ## Deploy to cluster for development, mounting the current directory inside the cluster.
+	@kubectl create namespace image-clone-controller; \
+	kubectl create secret --namespace image-clone-controller generic registry-cred \
+		--from-literal=registry="$(REGISTRY)" \
+		--from-literal=registry-username="$(REGISTRY_USERNAME)" \
+		--from-literal=registry-password="$(REGISTRY_PASSWORD)"; \
+	kubectl apply --filename rbac.yaml; \
+	kubectl apply --filename deployment-kind.yaml;
+
+.PHONY: kind-load-docker
+kind-load-docker: ## Load docker-image in kind cluster.
+	kind load docker-image $(IMG) $(IMG) --name image-clone-controller
+
+##@ Build
+
 .PHONY: clean
 clean: ## Clean build artifacts.
 	rm -rf $(BINARY)
@@ -24,38 +48,17 @@ fmt: ## Run go fmt.
 vet: ## Run go vet.
 	go vet ./...
 
-.PHONY: start-kind-cluster
-start-kind-cluster: ## Start kind cluster.
-	sed "s#CURRENT_DIR#$(PWD)#" kind-config.yaml | kind create cluster --name image-clone-controller --config -
-
-.PHONY: stop-kind-cluster
-stop-kind-cluster: ## Stop kind cluster.
-	kind delete cluster --name image-clone-controller
-
-.PHONY: local-deploy
-local-deploy: ## Deploy to cluster for development, mounting the current directory using directory mount for kind.
-	@kubectl create namespace image-clone-controller; \
-	kubectl create secret --namespace image-clone-controller generic registry-cred \
-		--from-literal=registry="$(REGISTRY)" \
-		--from-literal=registry-username="$(REGISTRY_USERNAME)" \
-		--from-literal=registry-password="$(REGISTRY_PASSWORD)"; \
-	kubectl apply --filename rbac.yaml; \
-	kubectl apply --filename deployment-kind.yaml;
-
-##@ Build
-
 .PHONY: build
-build: ## Build the binary.
+build: ## Build the controller binary.
 	GOOS=$(GOOS) go build -o $(BINARY)
 
-docker-build: ## Build docker image.
-	docker build -t ${IMG} .
+.PHONY: docker-build
+docker-build: ## Build controller docker image.
+	docker build -t $(IMG) .
 
-docker-push: ## Push docker image.
-	docker push ${IMG}
-
-kind-load-docker: ## Load docker-image in kind cluster.
-	kind load docker-image ${IMG} ${IMG} --name image-clone-controller
+.PHONY: docker-push
+docker-push: ## Push controller docker image.
+	docker push $(IMG)
 
 ##@ Deploy
 
@@ -69,10 +72,20 @@ deploy: ## Deploy the controller and related resources to the cluster.
 	kubectl apply --filename rbac.yaml; \
 	kubectl apply --filename deployment.yaml;
 
-
 .PHONY: undeploy
 undeploy: ## Remove controller and related resources from the cluster.
 	kubectl delete secret --namespace image-clone-controller registry-cred; \
 	kubectl delete --filename rbac.yaml; \
 	kubectl delete --filename deployment.yaml; \
-	kubectl delete namespace image-clone-controller
+	kubectl delete namespace image-clone-controller;
+
+# Misc
+
+ifneq ($(EXCLUDE_NAMESPACES),)
+deploy: modify_deployment
+endif
+
+# Using tee instead of in-place replacement to keep parity between macOS and Linux
+# See https://unix.stackexchange.com/q/13711
+modify_deployment:
+	sed "s#kube-system,local-path-storage,image-clone-controller#$(EXCLUDE_NAMESPACES)#" deployment.yaml | tee test.yaml
