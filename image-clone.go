@@ -41,8 +41,6 @@ func RegistryLogin(registry, username, password string) error {
 	if err := cf.Save(); err != nil {
 		return fmt.Errorf("unable to save config: %s", err)
 	}
-
-	fmt.Printf("logged in via %s\n", cf.Filename)
 	return nil
 }
 

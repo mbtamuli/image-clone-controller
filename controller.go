@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/util/wait"
 	appsinformers "k8s.io/client-go/informers/apps/v1"
 	"k8s.io/client-go/kubernetes"
@@ -25,6 +26,7 @@ type Controller struct {
 	registryUsername  string
 	registryPassword  string
 	repository        string
+	logger            *zap.SugaredLogger
 }
 
 func NewController(
@@ -35,7 +37,8 @@ func NewController(
 	registry,
 	registryUsername,
 	registryPassword,
-	repository string) *Controller {
+	repository string,
+	logger *zap.SugaredLogger) *Controller {
 
 	controller := &Controller{
 		kubeclientset:     clientset,
@@ -49,6 +52,7 @@ func NewController(
 		registryUsername:  registryUsername,
 		registryPassword:  registryPassword,
 		repository:        repository,
+		logger:            logger,
 	}
 
 	deploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -68,19 +72,17 @@ func NewController(
 func (c *Controller) Run(stopCh <-chan struct{}) error {
 	defer c.workqueue.ShutDown()
 
-	fmt.Println("Starting image-clone-controller")
-
-	fmt.Println("Waiting for informer caches to sync")
+	c.logger.Infof("Waiting for informer caches to sync")
 	if ok := cache.WaitForCacheSync(stopCh, c.deploymentsSynced); !ok {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
 
-	fmt.Println("Starting workers")
+	c.logger.Infof("Starting workers")
 	go wait.Until(c.runWorker, time.Second, stopCh)
 
-	fmt.Println("Started workers")
+	c.logger.Infof("Started workers")
 	<-stopCh
-	fmt.Println("Shutting down workers")
+	c.logger.Infof("Shutting down workers")
 
 	return nil
 }
@@ -108,7 +110,7 @@ func (c *Controller) processNextWorkItem() bool {
 		var ok bool
 		if key, ok = obj.(string); !ok {
 			c.workqueue.Forget(obj)
-			fmt.Println(fmt.Errorf("expected string in workqueue but got %#v", obj))
+			c.logger.Error("expected string in workqueue but got %#v", obj)
 			return nil
 		}
 		splitKey := strings.SplitN(key, "/", 2)
@@ -129,12 +131,12 @@ func (c *Controller) processNextWorkItem() bool {
 		}
 
 		c.workqueue.Forget(obj)
-		fmt.Printf("Successfully synced '%s'\n", objectKey)
+		c.logger.Infof("Successfully synced '%s'\n", objectKey)
 		return nil
 	}(obj)
 
 	if err != nil {
-		fmt.Println(err)
+		c.logger.Error(err)
 		return true
 	}
 

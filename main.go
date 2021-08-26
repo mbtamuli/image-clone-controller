@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"go.uber.org/zap"
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -23,12 +24,15 @@ func main() {
 
 	flag.Parse()
 
+	zapLogger, _ := zap.NewProduction()
+	defer zapLogger.Sync() // flushes buffer, if any
+	logger := zapLogger.Sugar()
+
 	stopCh := make(chan struct{})
 
 	clientset, err := getClient(*kubeconfig)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		logger.Fatal(err)
 	}
 
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(clientset, time.Second*30)
@@ -40,19 +44,20 @@ func main() {
 		*registry,
 		*registryUsername,
 		*registryPassword,
-		*repository)
+		*repository,
+		logger)
 
 	kubeInformerFactory.Start(stopCh)
 
+	logger.Infof("Logging into registry: %s", *registry)
 	err = RegistryLogin(*registry, *registryUsername, *registryPassword)
 	if err != nil {
-		fmt.Printf("unable to login to registry: %s", err)
-		os.Exit(1)
+		logger.Fatal("unable to login to registry: %s", err)
 	}
 
+	logger.Infof("Starting the controller")
 	if err = controller.Run(stopCh); err != nil {
-		fmt.Printf("Error running controller: %s", err)
-		os.Exit(1)
+		logger.Fatal("error running controller: %s", err)
 	}
 
 }

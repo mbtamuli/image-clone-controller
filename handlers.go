@@ -13,6 +13,9 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+// DockerConfigJSON, DockerConfig and DockerConfigEntry copied from
+// https://github.com/kubernetes/kubectl/blob/723266d1458429c5741ec6c0b5c315e72ec6f7cb/pkg/cmd/create/create_secret_docker.go#L64-L83
+
 // DockerConfigJSON represents a local docker auth config file
 // for pulling images.
 type DockerConfigJSON struct {
@@ -37,22 +40,23 @@ type DockerConfigEntry struct {
 // deploymentSyncHandler compares the actual state with the desired for deployments, and attempts to
 // converge the two.
 func (c *Controller) deploymentSyncHandler(key string) error {
-	fmt.Printf("Starting handler for %s\n", key)
+	c.logger.Info("Starting deployment handler for %s\n", key)
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
-		fmt.Printf("invalid resource key: %s\n", key)
+		c.logger.Error("invalid resource key: %s\n", key)
 		return nil
 	}
 
 	deployment, err := c.deploymentsLister.Deployments(namespace).Get(name)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			fmt.Printf("deployment '%s' in work queue no longer exists\n", key)
+			c.logger.Error("deployment '%s' in work queue no longer exists\n", key)
 			return nil
 		}
 		return err
 	}
 
+	c.logger.Info("Preparing Secret object")
 	secretApplyConfig := applycorev1.Secret(name, namespace)
 	dockerConfigJSONContent, err := handleDockerCfgJSONContent(c.registryPassword, c.registryPassword, c.registry)
 	if err != nil {
@@ -62,6 +66,7 @@ func (c *Controller) deploymentSyncHandler(key string) error {
 		secretApplyConfig.Data = make(map[string][]byte)
 	}
 	secretApplyConfig.Data[corev1.DockerConfigJsonKey] = dockerConfigJSONContent
+	c.logger.Info("Creating Secret")
 	dockerSecret, err := c.kubeclientset.CoreV1().Secrets(namespace).Apply(context.TODO(), secretApplyConfig, metav1.ApplyOptions{FieldManager: "image-clone-controller"})
 	if err != nil {
 		return err
@@ -73,15 +78,17 @@ func (c *Controller) deploymentSyncHandler(key string) error {
 	for i, container := range containers {
 		image := container.Image
 		if !ImageBackedUp(c.repository, image) {
+			c.logger.Info("Starting image backup for image: %s/%s/%s", c.registry, c.repository, image)
 			newImage, err := ImageBackup(c.registry, c.repository, image)
 			if err != nil {
 				return fmt.Errorf("unable to backup image: %s", err)
 			}
-
+			c.logger.Info("Replacing image '%s/%s/%s' with '%s'", c.registry, c.repository, image, newImage)
 			deployment.Spec.Template.Spec.Containers[i].Image = newImage
 		}
 	}
 
+	c.logger.Info("Updating deployment")
 	_, err = c.kubeclientset.AppsV1().Deployments(namespace).Update(context.TODO(), deployment, metav1.UpdateOptions{})
 	if err != nil {
 		return err
@@ -93,22 +100,23 @@ func (c *Controller) deploymentSyncHandler(key string) error {
 // daemonsetSyncHandler compares the actual state with the desired for daemonsets, and attempts to
 // converge the two.
 func (c *Controller) daemonsetSyncHandler(key string) error {
-	fmt.Printf("Starting daemonset handler for %s\n", key)
+	c.logger.Info("Starting daemonset handler for %s\n", key)
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
-		fmt.Printf("invalid resource key: %s\n", key)
+		c.logger.Error("invalid resource key: %s\n", key)
 		return nil
 	}
 
 	daemonset, err := c.daemonsetsLister.DaemonSets(namespace).Get(name)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			fmt.Printf("daemonset '%s' in work queue no longer exists\n", key)
+			c.logger.Error("daemonset '%s' in work queue no longer exists\n", key)
 			return nil
 		}
 		return err
 	}
 
+	c.logger.Info("Preparing Secret object")
 	secretApplyConfig := applycorev1.Secret(name, namespace)
 	dockerConfigJSONContent, err := handleDockerCfgJSONContent(c.registryPassword, c.registryPassword, c.registry)
 	if err != nil {
@@ -118,6 +126,7 @@ func (c *Controller) daemonsetSyncHandler(key string) error {
 		secretApplyConfig.Data = make(map[string][]byte)
 	}
 	secretApplyConfig.Data[corev1.DockerConfigJsonKey] = dockerConfigJSONContent
+	c.logger.Info("Creating Secret")
 	dockerSecret, err := c.kubeclientset.CoreV1().Secrets(namespace).Apply(context.TODO(), secretApplyConfig, metav1.ApplyOptions{FieldManager: "image-clone-controller"})
 	if err != nil {
 		return err
@@ -129,15 +138,17 @@ func (c *Controller) daemonsetSyncHandler(key string) error {
 	for i, container := range containers {
 		image := container.Image
 		if !ImageBackedUp(c.repository, image) {
+			c.logger.Info("Starting image backup for image: %s/%s/%s", c.registry, c.repository, image)
 			newImage, err := ImageBackup(c.registry, c.repository, image)
 			if err != nil {
 				return fmt.Errorf("unable to backup image: %s", err)
 			}
-
+			c.logger.Info("Replacing image '%s/%s/%s' with '%s'", c.registry, c.repository, image, newImage)
 			daemonset.Spec.Template.Spec.Containers[i].Image = newImage
 		}
 	}
 
+	c.logger.Info("Updating daemonsets")
 	_, err = c.kubeclientset.AppsV1().DaemonSets(namespace).Update(context.TODO(), daemonset, metav1.UpdateOptions{})
 	if err != nil {
 		return err
