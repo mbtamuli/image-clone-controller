@@ -76,6 +76,10 @@ func ImageBackup(registry, repository, src string) (string, error) {
 	return newRef.Name(), remote.Write(newRef, img, remote.WithAuthFromKeychain(authn.DefaultKeychain))
 }
 
+func ImageBackedUp(repository, image string) bool {
+	return strings.Contains(image, repository)
+}
+
 func rename(source name.Reference, tag name.Tag, registry, repository string) string {
 	var destination string
 	nameWithoutRegistry := strings.ReplaceAll(source.Context().Name(), source.Context().RegistryStr(), "")

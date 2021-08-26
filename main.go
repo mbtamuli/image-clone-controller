@@ -43,8 +43,15 @@ func main() {
 
 	kubeInformerFactory.Start(stopCh)
 
+	err = RegistryLogin(*registry, *registryUsername, *registryPassword)
+	if err != nil {
+		fmt.Printf("unable to login to registry: %s", err)
+		os.Exit(1)
+	}
+
 	if err = controller.Run(stopCh); err != nil {
-		fmt.Printf("Error running controller: %s", err.Error())
+		fmt.Printf("Error running controller: %s", err)
+		os.Exit(1)
 	}
 
 }
