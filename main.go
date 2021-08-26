@@ -36,8 +36,9 @@ import (
 )
 
 var (
-	scheme   = runtime.NewScheme()
-	setupLog = ctrl.Log.WithName("setup")
+	scheme            = runtime.NewScheme()
+	setupLog          = ctrl.Log.WithName("setup")
+	excludeNamespaces = "kube-system,local-path-storage,image-clone-controller"
 )
 
 func init() {
@@ -76,11 +77,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controllers.ImageClonerReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+	if err = (&controllers.DeploymentReconciler{
+		Client:            mgr.GetClient(),
+		Log:               ctrl.Log.WithName("deployment-controller"),
+		Scheme:            mgr.GetScheme(),
+		ExcludeNamespaces: excludeNamespaces,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ImageCloner")
+		setupLog.Error(err, "unable to create controller", "deployment controller", "ImageCloner")
+		os.Exit(1)
+	}
+
+	if err = (&controllers.DaemonsetReconciler{
+		Client:            mgr.GetClient(),
+		Log:               ctrl.Log.WithName("daemonset-controller"),
+		Scheme:            mgr.GetScheme(),
+		ExcludeNamespaces: excludeNamespaces,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "daemonset controller", "ImageCloner")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder
