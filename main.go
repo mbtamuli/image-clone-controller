@@ -35,6 +35,7 @@ func main() {
 
 	controller := NewController(clientset,
 		kubeInformerFactory.Apps().V1().Deployments(),
+		kubeInformerFactory.Apps().V1().DaemonSets(),
 		*namespace,
 		*registry,
 		*registryUsername,

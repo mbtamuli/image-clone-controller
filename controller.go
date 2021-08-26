@@ -1,18 +1,11 @@
 package main
 
 import (
-	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	applycorev1 "k8s.io/client-go/applyconfigurations/core/v1"
 	appsinformers "k8s.io/client-go/informers/apps/v1"
 	"k8s.io/client-go/kubernetes"
 	appslisters "k8s.io/client-go/listers/apps/v1"
@@ -24,6 +17,8 @@ type Controller struct {
 	kubeclientset     kubernetes.Interface
 	deploymentsLister appslisters.DeploymentLister
 	deploymentsSynced cache.InformerSynced
+	daemonsetsLister  appslisters.DaemonSetLister
+	daemonsetsSynced  cache.InformerSynced
 	workqueue         workqueue.RateLimitingInterface
 	namespace         string
 	registry          string
@@ -32,30 +27,10 @@ type Controller struct {
 	repository        string
 }
 
-// DockerConfigJSON represents a local docker auth config file
-// for pulling images.
-type DockerConfigJSON struct {
-	Auths DockerConfig `json:"auths" datapolicy:"token"`
-	// +optional
-	HttpHeaders map[string]string `json:"HttpHeaders,omitempty" datapolicy:"token"`
-}
-
-// DockerConfig represents the config file used by the docker CLI.
-// This config that represents the credentials that should be used
-// when pulling images from specific image repositories.
-type DockerConfig map[string]DockerConfigEntry
-
-// DockerConfigEntry holds the user information that grant the access to docker registry
-type DockerConfigEntry struct {
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty" datapolicy:"password"`
-	Email    string `json:"email,omitempty"`
-	Auth     string `json:"auth,omitempty" datapolicy:"token"`
-}
-
 func NewController(
 	clientset kubernetes.Interface,
 	deploymentInformer appsinformers.DeploymentInformer,
+	daemonsetInformer appsinformers.DaemonSetInformer,
 	namespace,
 	registry,
 	registryUsername,
@@ -66,6 +41,8 @@ func NewController(
 		kubeclientset:     clientset,
 		deploymentsLister: deploymentInformer.Lister(),
 		deploymentsSynced: deploymentInformer.Informer().HasSynced,
+		daemonsetsLister:  daemonsetInformer.Lister(),
+		daemonsetsSynced:  daemonsetInformer.Informer().HasSynced,
 		workqueue:         workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "image-clone-controller"),
 		namespace:         namespace,
 		registry:          registry,
@@ -76,6 +53,10 @@ func NewController(
 
 	deploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: controller.enqueDeployment,
+	})
+
+	daemonsetInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: controller.enqueDaemonset,
 	})
 
 	return controller
@@ -130,12 +111,25 @@ func (c *Controller) processNextWorkItem() bool {
 			fmt.Println(fmt.Errorf("expected string in workqueue but got %#v", obj))
 			return nil
 		}
-		if err := c.syncHandler(key); err != nil {
-			c.workqueue.AddRateLimited(key)
-			return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
+		splitKey := strings.SplitN(key, "/", 2)
+		objectType := splitKey[0]
+		objectKey := splitKey[1]
+
+		if objectType == "deployment" {
+			if err := c.deploymentSyncHandler(objectKey); err != nil {
+				c.workqueue.AddRateLimited(objectKey)
+				return fmt.Errorf("error syncing '%s': %s, requeuing", objectKey, err.Error())
+			}
 		}
+		if objectType == "daemonset" {
+			if err := c.daemonsetSyncHandler(objectKey); err != nil {
+				c.workqueue.AddRateLimited(objectKey)
+				return fmt.Errorf("error syncing '%s': %s, requeuing", objectKey, err.Error())
+			}
+		}
+
 		c.workqueue.Forget(obj)
-		fmt.Printf("Successfully synced '%s'\n", key)
+		fmt.Printf("Successfully synced '%s'\n", objectKey)
 		return nil
 	}(obj)
 
@@ -145,62 +139,6 @@ func (c *Controller) processNextWorkItem() bool {
 	}
 
 	return true
-}
-
-// syncHandler compares the actual state with the desired, and attempts to
-// converge the two.
-func (c *Controller) syncHandler(key string) error {
-	fmt.Printf("Starting handler for %s\n", key)
-	namespace, name, err := cache.SplitMetaNamespaceKey(key)
-	if err != nil {
-		fmt.Printf("invalid resource key: %s\n", key)
-		return nil
-	}
-
-	deployment, err := c.deploymentsLister.Deployments(namespace).Get(name)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			fmt.Printf("deployment '%s' in work queue no longer exists\n", key)
-			return nil
-		}
-		return err
-	}
-
-	secretApplyConfig := applycorev1.Secret(name, namespace)
-	dockerConfigJSONContent, err := handleDockerCfgJSONContent(c.registryPassword, c.registryPassword, c.registry)
-	if err != nil {
-		return err
-	}
-	if secretApplyConfig.Data == nil {
-		secretApplyConfig.Data = make(map[string][]byte)
-	}
-	secretApplyConfig.Data[corev1.DockerConfigJsonKey] = dockerConfigJSONContent
-	dockerSecret, err := c.kubeclientset.CoreV1().Secrets(namespace).Apply(context.TODO(), secretApplyConfig, metav1.ApplyOptions{FieldManager: "image-clone-controller"})
-	if err != nil {
-		return err
-	}
-
-	deployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: dockerSecret.Name}}
-
-	containers := deployment.Spec.Template.Spec.Containers
-	for i, container := range containers {
-		image := container.Image
-		if !ImageBackedUp(c.repository, image) {
-			newImage, err := ImageBackup(c.registry, c.repository, image)
-			if err != nil {
-				return fmt.Errorf("unable to backup image: %s", err)
-			}
-
-			deployment.Spec.Template.Spec.Containers[i].Image = newImage
-		}
-	}
-
-	_, err = c.kubeclientset.AppsV1().Deployments(namespace).Update(context.TODO(), deployment, metav1.UpdateOptions{})
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // enqueueDeployment takes a Deployment resource and converts it into a namespace/name
@@ -215,30 +153,26 @@ func (c *Controller) enqueDeployment(obj interface{}) {
 	if err != nil {
 		fmt.Println(fmt.Errorf("invalid resource key: %s", key))
 	}
+	key = "deployment/" + key
 	if !strings.Contains(c.namespace, namespace) {
 		c.workqueue.Add(key)
 	}
 }
 
-// handleDockerCfgJSONContent and encodeDockerConfigFieldAuth copied from
-// https://github.com/kubernetes/kubectl/blob/723266d1458429c5741ec6c0b5c315e72ec6f7cb/pkg/cmd/create/create_secret_docker.go#L289-L308
-
-// handleDockerCfgJSONContent serializes a ~/.docker/config.json file
-func handleDockerCfgJSONContent(username, password, server string) ([]byte, error) {
-	dockerConfigAuth := DockerConfigEntry{
-		Username: username,
-		Password: password,
-		Auth:     encodeDockerConfigFieldAuth(username, password),
+// enqueueDaemonset takes a Daemonset resource and converts it into a namespace/name
+// string which is then put onto the work queue.
+func (c *Controller) enqueDaemonset(obj interface{}) {
+	var key string
+	var err error
+	if key, err = cache.MetaNamespaceKeyFunc(obj); err != nil {
+		fmt.Println(err)
 	}
-	dockerConfigJSON := DockerConfigJSON{
-		Auths: map[string]DockerConfigEntry{server: dockerConfigAuth},
+	namespace, _, err := cache.SplitMetaNamespaceKey(key)
+	if err != nil {
+		fmt.Println(fmt.Errorf("invalid resource key: %s", key))
 	}
-
-	return json.Marshal(dockerConfigJSON)
-}
-
-// encodeDockerConfigFieldAuth returns base64 encoding of the username and password string
-func encodeDockerConfigFieldAuth(username, password string) string {
-	fieldValue := username + ":" + password
-	return base64.StdEncoding.EncodeToString([]byte(fieldValue))
+	key = "daemonset/" + key
+	if !strings.Contains(c.namespace, namespace) {
+		c.workqueue.Add(key)
+	}
 }
