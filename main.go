@@ -17,7 +17,7 @@ import (
 func main() {
 	kubeconfig := flag.String("kubeconfig", filepath.Join(os.Getenv("HOME"), ".kube", "config"), "absolute path to the kubeconfig file")
 	namespace := flag.String("exclude-namespaces", "kube-system", "skip watching resources in the list of comma separated namespaces")
-	repository := flag.String("repository", "mbtamuli", "Repository to use. For example, will default to 'mbtamuli', so the image will be pushed to REGISTRY/mbtamuli/IMAGE:TAG")
+	repository := flag.String("repository", "mbtamuli", "Repository to use. The images will be pushed to REGISTRY/<repository>/IMAGE:TAG")
 	registry := flag.String("registry", "", "Registry to use (defaults to DockerHub)")
 	registryUsername := flag.String("registry-username", "", "Username for registry login")
 	registryPassword := flag.String("registry-password", "", "Password for registry login")
