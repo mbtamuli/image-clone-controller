@@ -6,4 +6,14 @@ plugins:
   scorecard.sdk.operatorframework.io/v2: {}
 projectName: image-clone-controller
 repo: github.com/mbtamuli/image-clone-controller
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: mriyam.com
+  group: apps
+  kind: ImageCloner
+  path: github.com/mbtamuli/image-clone-controller/api/v1alpha1
+  version: v1alpha1
 version: "3"
