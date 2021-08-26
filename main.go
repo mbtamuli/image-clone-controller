@@ -31,7 +31,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	appsv1alpha1 "github.com/mbtamuli/image-clone-controller/api/v1alpha1"
 	"github.com/mbtamuli/image-clone-controller/controllers"
 	//+kubebuilder:scaffold:imports
 )
@@ -44,7 +43,6 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(appsv1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 

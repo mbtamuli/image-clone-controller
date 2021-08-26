@@ -23,8 +23,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	appsv1alpha1 "github.com/mbtamuli/image-clone-controller/api/v1alpha1"
 )
 
 // ImageClonerReconciler reconciles a ImageCloner object
@@ -57,6 +55,5 @@ func (r *ImageClonerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 // SetupWithManager sets up the controller with the Manager.
 func (r *ImageClonerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&appsv1alpha1.ImageCloner{}).
 		Complete(r)
 }
