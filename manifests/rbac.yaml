@@ -23,9 +23,12 @@ kind: ClusterRole
 metadata:
   name: controller-role
 rules:
-- apiGroups: ["*"]
+- apiGroups: ["apps"]
   resources: ["deployments", "daemonsets"]
-  verbs: ["list", "watch"]
-- apiGroups: ["*"]
+  verbs: ["list", "watch", "update"]
+- apiGroups: [""]
   resources: ["secrets","serviceaccounts"]
   verbs: ["get"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create","patch"]
