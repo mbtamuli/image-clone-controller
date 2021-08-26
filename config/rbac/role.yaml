@@ -7,28 +7,25 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - apps.mriyam.com
+  - ""
   resources:
-  - imagecloners
+  - secrets
   verbs:
-  - create
-  - delete
   - get
-  - list
   - patch
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  verbs:
+  - list
   - update
   - watch
 - apiGroups:
-  - apps.mriyam.com
+  - apps
   resources:
-  - imagecloners/finalizers
+  - deployments
   verbs:
+  - list
   - update
-- apiGroups:
-  - apps.mriyam.com
-  resources:
-  - imagecloners/status
-  verbs:
-  - get
-  - patch
-  - update
+  - watch

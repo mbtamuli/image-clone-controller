@@ -31,19 +31,12 @@ type ImageClonerReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-//+kubebuilder:rbac:groups=apps.mriyam.com,resources=imagecloners,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=apps.mriyam.com,resources=imagecloners/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=apps.mriyam.com,resources=imagecloners/finalizers,verbs=update
+//+kubebuilder:rbac:groups=apps,resources=deployments,verbs=list;watch;update
+//+kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=list;watch;update
+//+kubebuilder:rbac:groups="",resources=secrets,verbs=get;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the ImageCloner object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.9.2/pkg/reconcile
 func (r *ImageClonerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
 
