@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -10,7 +11,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -19,36 +19,33 @@ import (
 // DeploymentReconciler reconciles a Deployment object
 type DeploymentReconciler struct {
 	client.Client
-	Log               logr.Logger
-	Scheme            *runtime.Scheme
-	ExcludeNamespaces string
+	Log    logr.Logger
+	Scheme *runtime.Scheme
 }
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=list;watch;update
 //+kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=list;watch;update
-//+kubebuilder:rbac:groups="",resources=secrets,verbs=get;patch
+//+kubebuilder:rbac:groups="",resources=secrets,verbs=create;list;get;patch;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	if strings.Contains(r.ExcludeNamespaces, req.Namespace) {
+	log := r.Log.WithValues("deployment", req.NamespacedName)
+	log.Info("Reconciling...")
+
+	if strings.Contains(os.Getenv("EXCLUDED_NAMESPACES"), req.Namespace) {
+		log.Info("Skipping namespace from the list of EXCLUDED_NAMESPACES")
 		return ctrl.Result{}, nil
 	}
 
-	log := r.Log.WithValues("deployment", req.NamespacedName)
+	registry := os.Getenv("REGISTRY")
+	registryUsername := os.Getenv("REGISTRY_USERNAME")
+	registryPassword := os.Getenv("REGISTRY_PASSWORD")
 
-	// Check if the registry-secret exists
-	registrySecret := &corev1.Secret{}
-	err := r.Client.Get(ctx, types.NamespacedName{Name: "registry-cred", Namespace: "default"}, registrySecret)
+	err := RegistryLogin(registry, registryUsername, registryPassword)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("registry-cred secret not found: %v", err)
-	}
-	registry := string(registrySecret.Data["registry"])
-	registryUsername := string(registrySecret.Data["registry-username"])
-	registryPassword := string(registrySecret.Data["registry-password"])
-	if registry == "" || registryUsername == "" || registryPassword == "" {
-		log.Info("Registry credentials not set!")
-		return ctrl.Result{}, fmt.Errorf("registry credentials not set")
+		log.Error(err, "Failed to log into registry")
+		return ctrl.Result{}, nil
 	}
 
 	// Fetch the Deployment instance
@@ -74,7 +71,7 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			log.Error(err, "Failed to create secret object")
 			return ctrl.Result{}, err
 		}
-		log.Info("Creating a Secret for deployment", "Secret.Namespace", secret.Namespace, "Secret.Name", secret.Name)
+		log.Info("Creating a Secret for deployment imagePullSecret", "Secret.Namespace", secret.Namespace, "Secret.Name", secret.Name)
 		if err := r.Create(ctx, secret); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -84,14 +81,13 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		log.Error(err, "Failed to get Secret")
 		return ctrl.Result{}, err
 	}
+
 	deployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: secret.Name}}
 
 	containers := deployment.Spec.Template.Spec.Containers
-
-	updateDeployment := false
 	for i, container := range containers {
 		image := container.Image
-		if !ImageBackedUp(registryUsername, image) {
+		if !ImageBackedUp(registry, image) {
 			log.Info("Starting image backup", "image", fmt.Sprintf("%s/%s/%s", registry, registryUsername, image))
 			newImage, err := ImageBackup(registry, registryUsername, image)
 			if err != nil {
@@ -100,17 +96,13 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			}
 			log.Info("Replacing image", fmt.Sprintf("%s/%s/%s", registry, registryUsername, image), newImage)
 			deployment.Spec.Template.Spec.Containers[i].Image = newImage
-			updateDeployment = true
 		}
 	}
 
-	if updateDeployment {
-		log.Info("Updating deployment")
-		err = r.Update(ctx, deployment)
-		if err != nil {
-			log.Error(err, "Failed to update Deployment", "Deployment.Namespace", deployment.Namespace, "Deployment.Name", deployment.Name)
-			return ctrl.Result{}, err
-		}
+	err = r.Update(ctx, deployment)
+	if err != nil {
+		log.Error(err, "Failed to update Deployment", "Deployment.Namespace", deployment.Namespace, "Deployment.Name", deployment.Name)
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
@@ -120,6 +112,5 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *DeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.Deployment{}).
-		Owns(&corev1.Secret{}).
 		Complete(r)
 }
