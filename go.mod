@@ -8,10 +8,11 @@ require (
 	github.com/google/go-containerregistry v0.6.0
 	github.com/onsi/ginkgo v1.16.4
 	github.com/onsi/gomega v1.13.0
+	github.com/vdemeester/k8s-pkg-credentialprovider v1.21.0
+	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac // indirect
 	k8s.io/api v0.22.0-rc.0
 	k8s.io/apimachinery v0.22.0-rc.0
 	k8s.io/client-go v0.22.0-rc.0
-	k8s.io/kubernetes v1.22.1
 	sigs.k8s.io/controller-runtime v0.9.2
 )
 
