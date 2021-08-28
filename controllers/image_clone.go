@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -11,9 +10,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/kubernetes/pkg/credentialprovider"
 )
 
 func RegistryLogin(registry, username, password string) error {
@@ -91,33 +87,4 @@ func rename(source name.Reference, tag name.Tag, registry, repository string) st
 		destination = repository + "/" + nameWithoutNestedRepository[1:] + ":" + tag.TagStr()
 	}
 	return destination
-}
-
-// newSecret returns a Secret of type kubernetes.io/dockerconfigjson
-func newDockerCfgSecret(namespace, name, registry, registryUsername, registryPassword string) (*corev1.Secret, error) {
-	dockerConfigSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-		Type: corev1.SecretTypeDockerConfigJson,
-		Data: map[string][]byte{},
-	}
-
-	dockercfg := credentialprovider.DockerConfigJSON{
-		Auths: map[string]credentialprovider.DockerConfigEntry{
-			registry: {
-				Username: registryUsername,
-				Password: registryPassword,
-			},
-		},
-	}
-
-	dockercfgContent, err := json.Marshal(&dockercfg)
-	if err != nil {
-		return nil, err
-	}
-	dockerConfigSecret.Data[corev1.DockerConfigJsonKey] = dockercfgContent
-
-	return dockerConfigSecret, nil
 }

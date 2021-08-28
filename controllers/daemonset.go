@@ -25,7 +25,7 @@ type DaemonsetReconciler struct {
 
 //+kubebuilder:rbac:groups=apps,resources=deployment,verbs=list;watch;update
 //+kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=list;watch;update
-//+kubebuilder:rbac:groups="",resources=secrets,verbs=create;list;get;patch;watch
+//+kubebuilder:rbac:groups="",resources=secrets,verbs=create;list;get;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -63,25 +63,12 @@ func (r *DaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Check if the secret already exists, if not create a new one
-	secret := &corev1.Secret{}
-	err = r.Client.Get(ctx, req.NamespacedName, secret)
-	if err != nil && errors.IsNotFound(err) {
-		secret, err := newDockerCfgSecret(req.Namespace, req.Name, registry, registryUsername, registryPassword)
-		if err != nil {
-			log.Error(err, "Failed to create secret object")
-			return ctrl.Result{}, err
-		}
-		log.Info("Creating a Secret for daemonset imagePullSecret", "Secret.Namespace", secret.Namespace, "Secret.Name", secret.Name)
-		if err := r.Create(ctx, secret); err != nil {
-			return ctrl.Result{}, err
-		}
-		// Secret created successfully - return and requeue
-		return ctrl.Result{Requeue: true}, nil
-	} else if err != nil {
-		log.Error(err, "Failed to get Secret")
+	secret, err := ensureSecret(ctx, r.Client, req, log, registry, registryUsername, registryPassword)
+	if err != nil {
 		return ctrl.Result{}, err
+	} else {
+		return ctrl.Result{Requeue: true}, nil
 	}
-
 	daemonset.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: secret.Name}}
 
 	containers := daemonset.Spec.Template.Spec.Containers
