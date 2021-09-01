@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+
 	"os"
 	"strings"
 
@@ -71,7 +72,11 @@ func ImageBackup(registry, repository, src string) (string, error) {
 		return "", fmt.Errorf("unable to parse new ref: %s", err)
 	}
 
-	return newRef.Name(), remote.Write(newRef, img, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	if err := remote.Write(newRef, img, remote.WithAuthFromKeychain(authn.DefaultKeychain)); err != nil {
+		return "", fmt.Errorf("unable to write new image: %s", err)
+	}
+
+	return newRef.Name(), nil
 }
 
 func ImageBackedUp(registry, image string) bool {
@@ -79,12 +84,21 @@ func ImageBackedUp(registry, image string) bool {
 }
 
 func rename(source name.Reference, tag name.Tag, registry, repository string) string {
-	var destination string
+	destination := ""
 	nameWithoutRegistry := strings.ReplaceAll(source.Context().Name(), source.Context().RegistryStr(), "")
 	nameWithoutNestedRepository := strings.ReplaceAll(nameWithoutRegistry, "/", "-")
-	destination = fmt.Sprintf("%s/%s/%s:%s", registry, repository, nameWithoutNestedRepository[1:], tag.TagStr())
-	if strings.Contains(registry, "index.docker.io/v1") || registry == "" {
-		destination = repository + "/" + nameWithoutNestedRepository[1:] + ":" + tag.TagStr()
+	switch registry {
+	case "index.docker.io/v1", "index.docker.io/v2", "docker.io", "":
+		break
+	default:
+		destination += registry + "/"
 	}
+	switch repository {
+	case "":
+		break
+	default:
+		destination += repository + "/"
+	}
+	destination += nameWithoutNestedRepository[1:] + ":" + tag.TagStr()
 	return destination
 }
