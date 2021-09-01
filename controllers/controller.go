@@ -20,6 +20,9 @@ func skipNamespace(namespace string) bool {
 }
 
 func logInRegistry() error {
+	if os.Getenv("SKIP_LOGIN") == "true" {
+		return nil
+	}
 	registry := os.Getenv("REGISTRY")
 	registryUsername := os.Getenv("REGISTRY_USERNAME")
 	registryPassword := os.Getenv("REGISTRY_PASSWORD")

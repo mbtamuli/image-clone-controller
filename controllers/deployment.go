@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	"github.com/go-logr/logr"
@@ -32,13 +31,16 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	log := r.Log.WithValues("deployment", req.NamespacedName)
 	log.Info("Reconciling...")
 
-	skipNamespace(req.Namespace)
+	if skipNamespace(req.Namespace) {
+		return ctrl.Result{}, nil
+	}
 	if err := logInRegistry(); err != nil {
 		log.Error(err, "Failed to log into registry")
 		return ctrl.Result{}, nil
 	}
 
 	registry := os.Getenv("REGISTRY")
+	repository := os.Getenv("REPOSITORY")
 	registryUsername := os.Getenv("REGISTRY_USERNAME")
 	registryPassword := os.Getenv("REGISTRY_PASSWORD")
 
@@ -54,30 +56,32 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// Error reading the object - requeue the request.
 		return ctrl.Result{}, err
 	}
+	log.Info("Making copy of Deployment")
 	updatedDeployment := deployment.DeepCopy()
 
 	// Check if the secret already exists, if not create a new one
-	secret, err := ensureSecret(ctx, r.Client, req, log, registry, registryUsername, registryPassword)
-	if err != nil {
-		return ctrl.Result{}, err
-	} else {
-		return ctrl.Result{Requeue: true}, nil
+	if registryUsername != "" && registryPassword != "" {
+		secret, err := ensureSecret(ctx, r.Client, req, log, registry, registryUsername, registryPassword)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		log.Info("Secret details", "Name", secret.Name)
+		updatedDeployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: secret.Name}}
 	}
-	updatedDeployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: secret.Name}}
 
 	containers := updatedDeployment.Spec.Template.Spec.Containers
 	for i, container := range containers {
 		image := container.Image
 		if !ImageBackedUp(registry, image) {
-			log.Info("Starting image backup", "image", fmt.Sprintf("%s/%s/%s", registry, registryUsername, image))
-			newImage, err := ImageBackup(registry, registryUsername, image)
+			newImage, err := ImageBackup(registry, repository, image)
 			if err != nil {
 				log.Error(err, "Unable to backup image")
 				return ctrl.Result{}, err
 			}
-			log.Info("Replacing image", fmt.Sprintf("%s/%s/%s", registry, registryUsername, image), newImage)
+			log.Info("Image Backup", "New image", newImage)
 			updatedDeployment.Spec.Template.Spec.Containers[i].Image = newImage
 		}
+		log.Info("Image already backed up", "Image", image)
 	}
 
 	if err := r.Update(ctx, updatedDeployment); err != nil {

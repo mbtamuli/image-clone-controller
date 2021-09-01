@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -33,24 +32,22 @@ func (r *DaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	log := r.Log.WithValues("daemonset", req.NamespacedName)
 	log.Info("Reconciling...")
 
-	if strings.Contains(os.Getenv("EXCLUDED_NAMESPACES"), req.Namespace) {
-		log.Info("Skipping namespace from the list of EXCLUDED_NAMESPACES")
+	if skipNamespace(req.Namespace) {
 		return ctrl.Result{}, nil
 	}
-
-	registry := os.Getenv("REGISTRY")
-	registryUsername := os.Getenv("REGISTRY_USERNAME")
-	registryPassword := os.Getenv("REGISTRY_PASSWORD")
-
-	err := RegistryLogin(registry, registryUsername, registryPassword)
-	if err != nil {
+	if err := logInRegistry(); err != nil {
 		log.Error(err, "Failed to log into registry")
 		return ctrl.Result{}, nil
 	}
 
+	registry := os.Getenv("REGISTRY")
+	repository := os.Getenv("REPOSITORY")
+	registryUsername := os.Getenv("REGISTRY_USERNAME")
+	registryPassword := os.Getenv("REGISTRY_PASSWORD")
+
 	// Fetch the DaemonSet instance
 	daemonset := &appsv1.DaemonSet{}
-	err = r.Client.Get(ctx, req.NamespacedName, daemonset)
+	err := r.Client.Get(ctx, req.NamespacedName, daemonset)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
@@ -61,34 +58,33 @@ func (r *DaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// Error reading the object - requeue the request.
 		return ctrl.Result{}, err
 	}
+	updatedDaemonset := daemonset.DeepCopy()
 
 	// Check if the secret already exists, if not create a new one
 	secret, err := ensureSecret(ctx, r.Client, req, log, registry, registryUsername, registryPassword)
 	if err != nil {
 		return ctrl.Result{}, err
-	} else {
-		return ctrl.Result{Requeue: true}, nil
 	}
-	daemonset.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: secret.Name}}
+	updatedDaemonset.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: secret.Name}}
 
-	containers := daemonset.Spec.Template.Spec.Containers
+	containers := updatedDaemonset.Spec.Template.Spec.Containers
 	for i, container := range containers {
 		image := container.Image
 		if !ImageBackedUp(registry, image) {
-			log.Info("Starting image backup", "image", fmt.Sprintf("%s/%s/%s", registry, registryUsername, image))
-			newImage, err := ImageBackup(registry, registryUsername, image)
+			log.Info("Starting image backup", "image", fmt.Sprintf("%s/%s/%s", registry, repository, image))
+			newImage, err := ImageBackup(registry, repository, image)
 			if err != nil {
 				log.Error(err, "Unable to backup image")
 				return ctrl.Result{}, err
 			}
-			log.Info("Replacing image", fmt.Sprintf("%s/%s/%s", registry, registryUsername, image), newImage)
-			daemonset.Spec.Template.Spec.Containers[i].Image = newImage
+			log.Info("Replacing image", fmt.Sprintf("%s/%s/%s", registry, repository, image), newImage)
+			updatedDaemonset.Spec.Template.Spec.Containers[i].Image = newImage
 		}
 	}
 
-	err = r.Update(ctx, daemonset)
+	err = r.Update(ctx, updatedDaemonset)
 	if err != nil {
-		log.Error(err, "Failed to update DaemonSet", "DaemonSet.Namespace", daemonset.Namespace, "DaemonSet.Name", daemonset.Name)
+		log.Error(err, "Failed to update DaemonSet", "DaemonSet.Namespace", updatedDaemonset.Namespace, "DaemonSet.Name", updatedDaemonset.Name)
 		return ctrl.Result{}, err
 	}
 
