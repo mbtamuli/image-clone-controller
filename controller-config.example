@@ -1,1 +1,2 @@
 EXCLUDED_NAMESPACES=kube-system,local-path-storage,image-clone-controller-system
+SKIP_LOGIN=true
