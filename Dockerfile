@@ -21,6 +21,7 @@ RUN mkdir .docker
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 FROM gcr.io/distroless/static:nonroot
+LABEL org.opencontainers.image.source https://github.com/mbtamuli/image-clone-controller
 WORKDIR /
 COPY --from=builder /workspace/manager .
 COPY --chown=65532:65532 --from=builder /workspace/.docker .
