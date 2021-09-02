@@ -2,8 +2,9 @@ package controllers
 
 import (
 	"context"
-	"fmt"
 	"os"
+	"reflect"
+	"time"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -17,9 +18,8 @@ import (
 // DaemonsetReconciler reconciles a DaemonSet object
 type DaemonsetReconciler struct {
 	client.Client
-	Log               logr.Logger
-	Scheme            *runtime.Scheme
-	ExcludeNamespaces string
+	Log    logr.Logger
+	Scheme *runtime.Scheme
 }
 
 //+kubebuilder:rbac:groups=apps,resources=deployment,verbs=list;watch;update
@@ -30,11 +30,11 @@ type DaemonsetReconciler struct {
 // move the current state of the cluster closer to the desired state.
 func (r *DaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("daemonset", req.NamespacedName)
-	log.Info("Reconciling...")
 
 	if skipNamespace(req.Namespace) {
 		return ctrl.Result{}, nil
 	}
+
 	if err := logInRegistry(); err != nil {
 		log.Error(err, "Failed to log into registry")
 		return ctrl.Result{}, nil
@@ -47,8 +47,7 @@ func (r *DaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Fetch the DaemonSet instance
 	daemonset := &appsv1.DaemonSet{}
-	err := r.Client.Get(ctx, req.NamespacedName, daemonset)
-	if err != nil {
+	if err := r.Client.Get(ctx, req.NamespacedName, daemonset); err != nil {
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
 			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
@@ -58,34 +57,73 @@ func (r *DaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// Error reading the object - requeue the request.
 		return ctrl.Result{}, err
 	}
-	updatedDaemonset := daemonset.DeepCopy()
 
+	secret := &corev1.Secret{}
 	// Check if the secret already exists, if not create a new one
-	secret, err := ensureSecret(ctx, r.Client, req, log, registry, registryUsername, registryPassword)
-	if err != nil {
-		return ctrl.Result{}, err
+	if registryUsername != "" && registryPassword != "" {
+		err := r.Client.Get(ctx, req.NamespacedName, secret)
+		if err != nil && errors.IsNotFound(err) {
+			secret, err := newDockerCfgSecret(req.Namespace, req.Name, registry, registryUsername, registryPassword)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			log.Info("Creating a Secret for daemonset imagePullSecret", "Secret.Namespace", secret.Namespace, "Secret.Name", secret.Name)
+			if err := r.Client.Create(ctx, secret); err != nil {
+				return ctrl.Result{}, err
+			}
+			// Secret created successfully - return and requeue
+			log.Info("Secret created successfully")
+			return ctrl.Result{Requeue: true}, nil
+		} else if err != nil {
+			log.Error(err, "Failed to get Secret")
+			return ctrl.Result{}, nil
+		}
 	}
-	updatedDaemonset.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: secret.Name}}
+
+	updatedDaemonset := daemonset.DeepCopy()
+	// Ensure the daemonset has ImagePullSecrets
+	if !reflect.DeepEqual(daemonset.Spec.Template.Spec.ImagePullSecrets, []corev1.LocalObjectReference{{Name: secret.Name}}) {
+		log.Info("Updating ImagePullSecret with", "Secret", secret.Name)
+		updatedDaemonset.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: secret.Name}}
+		if !daemonsetReady(daemonset) {
+			log.Info("Waiting for daemonset to be ready")
+			return ctrl.Result{RequeueAfter: time.Second * 30}, nil
+		}
+		if err := r.Update(ctx, updatedDaemonset); err != nil {
+			log.Error(err, "Failed to update DaemonSet", "DaemonSet.Namespace", updatedDaemonset.Namespace, "DaemonSet.Name", updatedDaemonset.Name)
+			return ctrl.Result{}, err
+		}
+		log.Info("Deployment ImagePullSecrets updated successfully")
+		return ctrl.Result{Requeue: true}, nil
+	}
 
 	containers := updatedDaemonset.Spec.Template.Spec.Containers
+	updateDeployment := true
 	for i, container := range containers {
 		image := container.Image
 		if !ImageBackedUp(registry, image) {
-			log.Info("Starting image backup", "image", fmt.Sprintf("%s/%s/%s", registry, repository, image))
+			log.Info("Image Backed Up", "Old image", image)
 			newImage, err := ImageBackup(registry, repository, image)
 			if err != nil {
+				updateDeployment = false
 				log.Error(err, "Unable to backup image")
 				return ctrl.Result{}, err
 			}
-			log.Info("Replacing image", fmt.Sprintf("%s/%s/%s", registry, repository, image), newImage)
+			log.Info("Image Backed Up", "New image", newImage)
 			updatedDaemonset.Spec.Template.Spec.Containers[i].Image = newImage
 		}
 	}
 
-	err = r.Update(ctx, updatedDaemonset)
-	if err != nil {
-		log.Error(err, "Failed to update DaemonSet", "DaemonSet.Namespace", updatedDaemonset.Namespace, "DaemonSet.Name", updatedDaemonset.Name)
-		return ctrl.Result{}, err
+	if updateDeployment {
+		if !daemonsetReady(daemonset) {
+			log.Info("Waiting for daemonset to be ready")
+			return ctrl.Result{RequeueAfter: time.Second * 30}, nil
+		}
+		if err := r.Update(ctx, updatedDaemonset); err != nil {
+			log.Error(err, "Failed to update DaemonSet", "DaemonSet.Namespace", updatedDaemonset.Namespace, "DaemonSet.Name", updatedDaemonset.Name)
+			return ctrl.Result{}, err
+		}
+		log.Info("All images of daemonset have been backed up.")
 	}
 
 	return ctrl.Result{}, nil

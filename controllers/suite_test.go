@@ -25,7 +25,7 @@ var k8sClient client.Client
 var testEnv *envtest.Environment
 var server *httptest.Server
 
-func TestAPIs(t *testing.T) {
+func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
 
 	RunSpecs(t, "Controller Suite")
@@ -36,6 +36,12 @@ var _ = BeforeSuite(func() {
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{}
+	if os.Getenv("USE_EXISTING_CLUSTER") == "true" {
+		useCluster := true
+		testEnv = &envtest.Environment{
+			UseExistingCluster: &useCluster,
+		}
+	}
 
 	cfg, err := testEnv.Start()
 	Expect(err).NotTo(HaveOccurred())

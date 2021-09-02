@@ -3,13 +3,14 @@ package controllers
 import (
 	"context"
 	"os"
+	"reflect"
+	"time"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -29,11 +30,11 @@ type DeploymentReconciler struct {
 // move the current state of the cluster closer to the desired state.
 func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("deployment", req.NamespacedName)
-	log.Info("Reconciling...")
 
 	if skipNamespace(req.Namespace) {
 		return ctrl.Result{}, nil
 	}
+
 	if err := logInRegistry(); err != nil {
 		log.Error(err, "Failed to log into registry")
 		return ctrl.Result{}, nil
@@ -56,37 +57,73 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// Error reading the object - requeue the request.
 		return ctrl.Result{}, err
 	}
-	log.Info("Making copy of Deployment")
-	updatedDeployment := deployment.DeepCopy()
 
+	secret := &corev1.Secret{}
 	// Check if the secret already exists, if not create a new one
 	if registryUsername != "" && registryPassword != "" {
-		secret, err := ensureSecret(ctx, r.Client, req, log, registry, registryUsername, registryPassword)
-		if err != nil {
+		err := r.Client.Get(ctx, req.NamespacedName, secret)
+		if err != nil && errors.IsNotFound(err) {
+			secret, err := newDockerCfgSecret(req.Namespace, req.Name, registry, registryUsername, registryPassword)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			log.Info("Creating a Secret for daemonset imagePullSecret", "Secret.Namespace", secret.Namespace, "Secret.Name", secret.Name)
+			if err := r.Client.Create(ctx, secret); err != nil {
+				return ctrl.Result{}, err
+			}
+			// Secret created successfully - return and requeue
+			log.Info("Secret created successfully")
+			return ctrl.Result{Requeue: true}, nil
+		} else if err != nil {
+			log.Error(err, "Failed to get Secret")
+			return ctrl.Result{}, nil
+		}
+	}
+
+	updatedDeployment := deployment.DeepCopy()
+	// Ensure the deployment has ImagePullSecrets
+	if !reflect.DeepEqual(deployment.Spec.Template.Spec.ImagePullSecrets, []corev1.LocalObjectReference{{Name: secret.Name}}) {
+		log.Info("Updating ImagePullSecret with", "Secret", secret.Name)
+		updatedDeployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: secret.Name}}
+		if !deploymentReady(deployment) {
+			log.Info("Waiting for deployment to be ready")
+			return ctrl.Result{RequeueAfter: time.Second * 30}, nil
+		}
+		if err := r.Update(ctx, updatedDeployment); err != nil {
+			log.Error(err, "Failed to update Deployment", "Deployment.Namespace", updatedDeployment.Namespace, "Deployment.Name", updatedDeployment.Name)
 			return ctrl.Result{}, err
 		}
-		log.Info("Secret details", "Name", secret.Name)
-		updatedDeployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: secret.Name}}
+		log.Info("Deployment ImagePullSecrets updated successfully")
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	containers := updatedDeployment.Spec.Template.Spec.Containers
+	updateDeployment := true
 	for i, container := range containers {
 		image := container.Image
 		if !ImageBackedUp(registry, image) {
+			log.Info("Image Backed Up", "Old image", image)
 			newImage, err := ImageBackup(registry, repository, image)
 			if err != nil {
+				updateDeployment = false
 				log.Error(err, "Unable to backup image")
 				return ctrl.Result{}, err
 			}
-			log.Info("Image Backup", "New image", newImage)
+			log.Info("Image Backed Up", "New image", newImage)
 			updatedDeployment.Spec.Template.Spec.Containers[i].Image = newImage
 		}
-		log.Info("Image already backed up", "Image", image)
 	}
 
-	if err := r.Update(ctx, updatedDeployment); err != nil {
-		log.Error(err, "Failed to update Deployment", "Deployment.Namespace", updatedDeployment.Namespace, "Deployment.Name", updatedDeployment.Name)
-		return ctrl.Result{}, err
+	if updateDeployment {
+		if !deploymentReady(deployment) {
+			log.Info("Waiting for deployment to be ready")
+			return ctrl.Result{RequeueAfter: time.Second * 30}, nil
+		}
+		if err := r.Update(ctx, updatedDeployment); err != nil {
+			log.Error(err, "Failed to update Deployment", "Deployment.Namespace", updatedDeployment.Namespace, "Deployment.Name", updatedDeployment.Name)
+			return ctrl.Result{RequeueAfter: time.Minute}, err
+		}
+		log.Info("All images of deployment have been backed up.")
 	}
 
 	return ctrl.Result{}, nil

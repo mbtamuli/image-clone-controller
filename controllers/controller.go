@@ -1,18 +1,14 @@
 package controllers
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"strings"
 
-	"github.com/go-logr/logr"
 	credentialprovider "github.com/vdemeester/k8s-pkg-credentialprovider"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func skipNamespace(namespace string) bool {
@@ -28,25 +24,6 @@ func logInRegistry() error {
 	registryPassword := os.Getenv("REGISTRY_PASSWORD")
 
 	return RegistryLogin(registry, registryUsername, registryPassword)
-}
-
-func ensureSecret(ctx context.Context, client client.Client, req ctrl.Request, log logr.Logger, registry, registryUsername, registryPassword string) (*corev1.Secret, error) {
-	secret := &corev1.Secret{}
-	err := client.Get(ctx, req.NamespacedName, secret)
-	if err != nil && errors.IsNotFound(err) {
-		secret, err := newDockerCfgSecret(req.Namespace, req.Name, registry, registryUsername, registryPassword)
-		if err != nil {
-			return nil, err
-		}
-		log.Info("Creating a Secret for daemonset imagePullSecret", "Secret.Namespace", secret.Namespace, "Secret.Name", secret.Name)
-		if err := client.Create(ctx, secret); err != nil {
-			return nil, err
-		}
-	} else if err != nil {
-		log.Error(err, "Failed to get Secret")
-		return nil, err
-	}
-	return secret, nil
 }
 
 // newSecret returns a Secret of type kubernetes.io/dockerconfigjson
@@ -76,4 +53,24 @@ func newDockerCfgSecret(namespace, name, registry, registryUsername, registryPas
 	dockerConfigSecret.Data[corev1.DockerConfigJsonKey] = dockercfgContent
 
 	return dockerConfigSecret, nil
+}
+
+func deploymentReady(deployments *appsv1.Deployment) bool {
+	status := deployments.Status
+	desired := status.Replicas
+	ready := status.ReadyReplicas
+	if desired == ready && desired > 0 {
+		return true
+	}
+	return false
+}
+
+func daemonsetReady(daemonsets *appsv1.DaemonSet) bool {
+	status := daemonsets.Status
+	desired := status.DesiredNumberScheduled
+	ready := status.NumberReady
+	if desired == ready && desired > 0 {
+		return true
+	}
+	return false
 }
