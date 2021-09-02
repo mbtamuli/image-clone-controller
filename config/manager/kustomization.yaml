@@ -1,0 +1,29 @@
+resources:
+- manager.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+- envs:
+  - controller-config
+  name: controller-config
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+images:
+- name: controller
+  newName: ghcr.io/mbtamuli/image-clone-controller
+  newTag: 0.0.1
+
+secretGenerator:
+- envs:
+  - env
+  name: registry-cred
+
+configMapGenerator:
+- envs:
+  - controller-config
+  name: controller-config
+
+patchesStrategicMerge:
+- env.yaml

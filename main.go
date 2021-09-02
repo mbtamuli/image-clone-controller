@@ -2,83 +2,95 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"os"
-	"path/filepath"
-	"time"
 
-	"go.uber.org/zap"
-	kubeinformers "k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
+	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
+	// to ensure that exec-entrypoint and run can make use of them.
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	"github.com/mbtamuli/image-clone-controller/controllers"
+	//+kubebuilder:scaffold:imports
 )
 
-func main() {
-	kubeconfig := flag.String("kubeconfig", filepath.Join(os.Getenv("HOME"), ".kube", "config"), "absolute path to the kubeconfig file")
-	namespace := flag.String("exclude-namespaces", "kube-system", "skip watching resources in the list of comma separated namespaces")
-	repository := flag.String("repository", "mbtamuli", "Repository to use. The images will be pushed to REGISTRY/<repository>/IMAGE:TAG")
-	registry := flag.String("registry", "", "Registry to use (defaults to DockerHub)")
-	registryUsername := flag.String("registry-username", "", "Username for registry login")
-	registryPassword := flag.String("registry-password", "", "Password for registry login")
+var (
+	scheme   = runtime.NewScheme()
+	setupLog = ctrl.Log.WithName("setup")
+)
 
-	flag.Parse()
+func init() {
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	zapLogger, _ := zap.NewProduction()
-	defer zapLogger.Sync() // flushes buffer, if any
-	logger := zapLogger.Sugar()
-
-	stopCh := make(chan struct{})
-
-	clientset, err := getClient(*kubeconfig)
-	if err != nil {
-		logger.Fatal(err)
-	}
-
-	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(clientset, time.Second*30)
-
-	controller := NewController(clientset,
-		kubeInformerFactory.Apps().V1().Deployments(),
-		kubeInformerFactory.Apps().V1().DaemonSets(),
-		*namespace,
-		*registry,
-		*registryUsername,
-		*registryPassword,
-		*repository,
-		logger)
-
-	kubeInformerFactory.Start(stopCh)
-
-	logger.Infof("Logging into registry: %s", *registry)
-	err = RegistryLogin(*registry, *registryUsername, *registryPassword)
-	if err != nil {
-		logger.Fatal("unable to login to registry: %s", err)
-	}
-
-	logger.Infof("Starting the controller")
-	if err = controller.Run(stopCh); err != nil {
-		logger.Fatal("error running controller: %s", err)
-	}
-
+	//+kubebuilder:scaffold:scheme
 }
 
-func getClient(kubeconfig string) (*kubernetes.Clientset, error) {
-	var kubeClient *kubernetes.Clientset
-	if inClusterConfig, err := rest.InClusterConfig(); err != nil {
-		config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-		if err != nil {
-			return nil, fmt.Errorf("unable to build config from kubeconfig file: %s", err)
-		}
-		kubeClient, err = kubernetes.NewForConfig(config)
-		if err != nil {
-			return nil, fmt.Errorf("unable to build clientset from config: %s", err)
-		}
-	} else {
-		kubeClient, err = kubernetes.NewForConfig(inClusterConfig)
-		if err != nil {
-			return nil, fmt.Errorf("unable to build clientset from in cluster config: %s", err)
-		}
+func main() {
+	var metricsAddr string
+	var enableLeaderElection bool
+	var probeAddr string
+	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
+	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
+		"Enable leader election for controller manager. "+
+			"Enabling this will ensure there is only one active controller manager.")
+	opts := zap.Options{
+		Development: true,
+	}
+	opts.BindFlags(flag.CommandLine)
+	flag.Parse()
+
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+		Scheme:                 scheme,
+		MetricsBindAddress:     metricsAddr,
+		Port:                   9443,
+		HealthProbeBindAddress: probeAddr,
+		LeaderElection:         enableLeaderElection,
+		LeaderElectionID:       "bcdfbc1c.mriyam.com",
+	})
+	if err != nil {
+		setupLog.Error(err, "unable to start manager")
+		os.Exit(1)
 	}
 
-	return kubeClient, nil
+	if err = (&controllers.DeploymentReconciler{
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("deployment-controller"),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "deployment controller", "ImageCloner")
+		os.Exit(1)
+	}
+
+	if err = (&controllers.DaemonsetReconciler{
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("daemonset-controller"),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "daemonset controller", "ImageCloner")
+		os.Exit(1)
+	}
+	//+kubebuilder:scaffold:builder
+
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		setupLog.Error(err, "unable to set up health check")
+		os.Exit(1)
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		setupLog.Error(err, "unable to set up ready check")
+		os.Exit(1)
+	}
+
+	setupLog.Info("starting manager")
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		setupLog.Error(err, "problem running manager")
+		os.Exit(1)
+	}
 }
